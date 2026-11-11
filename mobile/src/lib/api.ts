@@ -1,5 +1,5 @@
 import Constants from "expo-constants";
-import type { FlyerEvent } from "./types";
+import type { ExtractResponse } from "./types";
 
 /**
  * Where the Flyr server lives. Set EXPO_PUBLIC_API_URL in mobile/.env to override.
@@ -18,18 +18,16 @@ function todayLocal(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-export async function extractEvent(imageBase64: string, mimeType: string): Promise<FlyerEvent> {
+export const deviceTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/** Sends the photo to the server, which runs OCR and then Gemini. */
+export async function extractEvent(imageBase64: string): Promise<ExtractResponse> {
   const res = await fetch(`${apiUrl()}/extract`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      imageBase64,
-      mimeType,
-      today: todayLocal(),
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    }),
+    body: JSON.stringify({ imageBase64, today: todayLocal(), timeZone: deviceTimeZone() }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? `Server error ${res.status}`);
-  return data.event as FlyerEvent;
+  return data as ExtractResponse;
 }

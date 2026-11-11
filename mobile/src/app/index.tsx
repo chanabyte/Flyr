@@ -24,8 +24,8 @@ export default function CaptureScreen() {
     setImageUri(asset.uri);
     setLoading(true);
     try {
-      const event = await extractEvent(asset.base64, asset.mimeType ?? "image/jpeg");
-      eventStore.set(event);
+      const result = await extractEvent(asset.base64);
+      eventStore.set(result);
       router.push("/review");
     } catch (err) {
       Alert.alert("Couldn't find an event", err instanceof Error ? err.message : String(err));
@@ -57,7 +57,7 @@ export default function CaptureScreen() {
         {loading && (
           <View style={styles.overlay}>
             <ActivityIndicator size="large" color="#fff" />
-            <Text style={styles.overlayText}>Reading flyer…</Text>
+            <Text style={styles.overlayText}>Reading text & building event…</Text>
           </View>
         )}
       </View>

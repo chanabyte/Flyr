@@ -1,16 +1,18 @@
 import { useState } from "react";
-import { Alert, Linking, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import { Button } from "@/components/Button";
 import { eventStore } from "@/lib/eventStore";
 import { googleCalendarUrl } from "@/lib/calendar";
-import type { FlyerEvent } from "@/lib/types";
+import { deviceTimeZone } from "@/lib/api";
+import { fromForm, toForm, type EventForm } from "@/lib/event";
 
 export default function ReviewScreen() {
-  const initial = eventStore.get();
-  const [event, setEvent] = useState<FlyerEvent | null>(initial);
+  const result = eventStore.get();
+  const [form, setForm] = useState<EventForm | null>(result ? toForm(result.event, deviceTimeZone()) : null);
+  const [showOcr, setShowOcr] = useState(false);
 
-  if (!event) {
+  if (!result || !form) {
     return (
       <View style={styles.container}>
         <Text>No event yet.</Text>
@@ -19,12 +21,18 @@ export default function ReviewScreen() {
     );
   }
 
-  const update = <K extends keyof FlyerEvent>(key: K, value: FlyerEvent[K]) =>
-    setEvent({ ...event, [key]: value });
+  const update = <K extends keyof EventForm>(key: K, value: EventForm[K]) => setForm({ ...form, [key]: value });
+
+  function toggleAllDay(allDay: boolean) {
+    // Switch between "2026-11-14" and "2026-11-14T09:00:00" style values
+    const conv = (v: string) => (allDay ? v.slice(0, 10) : `${v.slice(0, 10)}T09:00:00`);
+    setForm({ ...form!, allDay, start: conv(form!.start), end: conv(form!.end) });
+  }
 
   async function addToCalendar() {
     try {
-      await Linking.openURL(googleCalendarUrl(event!));
+      // fromForm gives a Google Calendar API event body; for now we open it as a link
+      await Linking.openURL(googleCalendarUrl(fromForm(form!)));
     } catch (err) {
       Alert.alert("Couldn't open Google Calendar", err instanceof Error ? err.message : String(err));
     }
@@ -32,24 +40,32 @@ export default function ReviewScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-      <Field label="Title" value={event.title} onChange={(v) => update("title", v)} />
-      <Field label="Start" value={event.start} onChange={(v) => update("start", v)} hint={pretty(event.start, event.allDay)} />
-      <Field label="End" value={event.end} onChange={(v) => update("end", v)} hint={pretty(event.end, event.allDay)} />
+      <Field label="Title" value={form.summary} onChange={(v) => update("summary", v)} />
       <View style={styles.row}>
         <Text style={styles.label}>All day</Text>
-        <Switch value={event.allDay} onValueChange={(v) => update("allDay", v)} />
+        <Switch value={form.allDay} onValueChange={toggleAllDay} />
       </View>
-      <Field label="Location" value={event.location} onChange={(v) => update("location", v)} />
-      <Field label="Details" value={event.description} onChange={(v) => update("description", v)} multiline />
+      <Field label="Start" value={form.start} onChange={(v) => update("start", v)} hint={pretty(form.start, form.allDay)} />
+      <Field label="End" value={form.end} onChange={(v) => update("end", v)} hint={pretty(form.end, form.allDay)} />
+      <Field label="Location" value={form.location} onChange={(v) => update("location", v)} />
+      <Field label="Details" value={form.description} onChange={(v) => update("description", v)} multiline />
 
       <Button title="Add to Google Calendar" onPress={addToCalendar} />
       <Button title="Retake" variant="secondary" onPress={() => router.back()} />
+
+      <Pressable onPress={() => setShowOcr(!showOcr)}>
+        <Text style={styles.ocrToggle}>
+          {showOcr ? "Hide" : "Show"} OCR text ({Math.round(result.ocrConfidence)}% confidence)
+        </Text>
+      </Pressable>
+      {showOcr && <Text style={styles.ocrText}>{result.rawText}</Text>}
     </ScrollView>
   );
 }
 
-function pretty(iso: string, allDay: boolean): string {
-  const d = new Date(iso);
+function pretty(value: string, allDay: boolean): string {
+  // Date-only strings parse as UTC, so add a local midnight time for display
+  const d = new Date(allDay ? `${value.slice(0, 10)}T00:00:00` : value);
   if (isNaN(d.getTime())) return "⚠️ Not a valid date";
   return allDay ? d.toDateString() : d.toLocaleString();
 }
@@ -75,4 +91,6 @@ const styles = StyleSheet.create({
   input: { borderWidth: 1, borderColor: "#dadce0", borderRadius: 10, padding: 12, fontSize: 16 },
   hint: { fontSize: 13, color: "#5f6368" },
   row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  ocrToggle: { color: "#1a73e8", textAlign: "center", marginTop: 8 },
+  ocrText: { fontFamily: "Courier", fontSize: 12, color: "#3c4043", backgroundColor: "#f1f3f4", padding: 12, borderRadius: 8 },
 });

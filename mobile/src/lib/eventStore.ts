@@ -1,13 +1,13 @@
-import type { FlyerEvent } from "./types";
+import type { ExtractResponse } from "./types";
 
 // Tiny in-memory handoff between the capture and review screens.
-let current: FlyerEvent | null = null;
+let current: ExtractResponse | null = null;
 
 export const eventStore = {
-  set(event: FlyerEvent) {
-    current = event;
+  set(result: ExtractResponse) {
+    current = result;
   },
-  get(): FlyerEvent | null {
+  get(): ExtractResponse | null {
     return current;
   },
 };

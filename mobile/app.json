@@ -30,7 +30,10 @@
           "cameraPermission": "Flyr uses the camera to photograph event flyers.",
           "photosPermission": "Flyr reads photos of event flyers you choose."
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker",
+      "expo-web-browser",
+      "expo-secure-store"
     ],
     "scheme": "flyr",
     "experiments": {

@@ -1,16 +1,32 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Linking, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import { Button } from "@/components/Button";
+import { DateTimeField } from "@/components/DateTimeField";
 import { eventStore } from "@/lib/eventStore";
 import { googleCalendarUrl } from "@/lib/calendar";
-import { deviceTimeZone } from "@/lib/api";
-import { fromForm, toForm, type EventForm } from "@/lib/event";
+import {
+  ApiError,
+  createCalendarEvent,
+  deviceTimeZone,
+  getAuthStatus,
+  signIn,
+  signOut,
+  type AuthStatus,
+} from "@/lib/api";
+import { fromForm, moveStart, setEnd, toForm, toggleAllDay, type EventForm } from "@/lib/event";
 
 export default function ReviewScreen() {
   const result = eventStore.get();
   const [form, setForm] = useState<EventForm | null>(result ? toForm(result.event, deviceTimeZone()) : null);
   const [showOcr, setShowOcr] = useState(false);
+  const [auth, setAuth] = useState<AuthStatus | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const refreshAuth = () => getAuthStatus().then(setAuth).catch(() => setAuth(null));
+  useEffect(() => {
+    refreshAuth();
+  }, []);
 
   if (!result || !form) {
     return (
@@ -23,34 +39,75 @@ export default function ReviewScreen() {
 
   const update = <K extends keyof EventForm>(key: K, value: EventForm[K]) => setForm({ ...form, [key]: value });
 
-  function toggleAllDay(allDay: boolean) {
-    // Switch between "2026-11-14" and "2026-11-14T09:00:00" style values
-    const conv = (v: string) => (allDay ? v.slice(0, 10) : `${v.slice(0, 10)}T09:00:00`);
-    setForm({ ...form!, allDay, start: conv(form!.start), end: conv(form!.end) });
-  }
-
-  async function addToCalendar() {
+  /** Fallback when Google sign-in isn't set up on the server: open a prefilled Google Calendar page. */
+  async function openPrefilledLink() {
     try {
-      // fromForm gives a Google Calendar API event body; for now we open it as a link
       await Linking.openURL(googleCalendarUrl(fromForm(form!)));
     } catch (err) {
       Alert.alert("Couldn't open Google Calendar", err instanceof Error ? err.message : String(err));
     }
   }
 
+  async function addToCalendar() {
+    if (!auth?.configured) return openPrefilledLink();
+
+    setSaving(true);
+    try {
+      if (!auth.signedIn) {
+        const ok = await signIn();
+        await refreshAuth();
+        if (!ok) return;
+      }
+      const created = await createCalendarEvent(fromForm(form!));
+      Alert.alert("Added to your calendar", form!.summary, [
+        { text: "View in Calendar", onPress: () => Linking.openURL(created.htmlLink) },
+        { text: "Scan another", onPress: () => router.back() },
+      ]);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        // Sign-in expired or was revoked: show the sign-in button again
+        await refreshAuth();
+        Alert.alert("Please sign in again", err.message);
+      } else {
+        Alert.alert("Couldn't add the event", err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSignOut() {
+    await signOut().catch(() => {});
+    refreshAuth();
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <Field label="Title" value={form.summary} onChange={(v) => update("summary", v)} />
-      <View style={styles.row}>
-        <Text style={styles.label}>All day</Text>
-        <Switch value={form.allDay} onValueChange={toggleAllDay} />
+
+      <View style={styles.card}>
+        <View style={styles.row}>
+          <Text style={styles.label}>All day</Text>
+          <Switch value={form.allDay} onValueChange={(v) => setForm(toggleAllDay(form, v))} />
+        </View>
+        <DateTimeField label="Starts" value={form.start} dateOnly={form.allDay} onChange={(d) => setForm(moveStart(form, d))} />
+        <DateTimeField label="Ends" value={form.end} dateOnly={form.allDay} onChange={(d) => setForm(setEnd(form, d))} />
       </View>
-      <Field label="Start" value={form.start} onChange={(v) => update("start", v)} hint={pretty(form.start, form.allDay)} />
-      <Field label="End" value={form.end} onChange={(v) => update("end", v)} hint={pretty(form.end, form.allDay)} />
+
       <Field label="Location" value={form.location} onChange={(v) => update("location", v)} />
       <Field label="Details" value={form.description} onChange={(v) => update("description", v)} multiline />
 
-      <Button title="Add to Google Calendar" onPress={addToCalendar} />
+      <Button
+        title={saving ? "Saving…" : auth?.configured && !auth.signedIn ? "Sign in & add to Google Calendar" : "Add to Google Calendar"}
+        onPress={addToCalendar}
+        disabled={saving}
+      />
+      {auth?.signedIn && (
+        <Text style={styles.account}>
+          Saving to {auth.email ?? "your Google account"} ·{" "}
+          <Text style={styles.link} onPress={handleSignOut}>Sign out</Text>
+        </Text>
+      )}
       <Button title="Retake" variant="secondary" onPress={() => router.back()} />
 
       <Pressable onPress={() => setShowOcr(!showOcr)}>
@@ -63,14 +120,7 @@ export default function ReviewScreen() {
   );
 }
 
-function pretty(value: string, allDay: boolean): string {
-  // Date-only strings parse as UTC, so add a local midnight time for display
-  const d = new Date(allDay ? `${value.slice(0, 10)}T00:00:00` : value);
-  if (isNaN(d.getTime())) return "⚠️ Not a valid date";
-  return allDay ? d.toDateString() : d.toLocaleString();
-}
-
-function Field(props: { label: string; value: string; onChange: (v: string) => void; hint?: string; multiline?: boolean }) {
+function Field(props: { label: string; value: string; onChange: (v: string) => void; multiline?: boolean }) {
   return (
     <View style={{ gap: 6 }}>
       <Text style={styles.label}>{props.label}</Text>
@@ -80,17 +130,18 @@ function Field(props: { label: string; value: string; onChange: (v: string) => v
         onChangeText={props.onChange}
         multiline={props.multiline}
       />
-      {props.hint && <Text style={styles.hint}>{props.hint}</Text>}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { padding: 20, gap: 16, backgroundColor: "#fff", flexGrow: 1 },
+  card: { gap: 14, padding: 14, borderRadius: 12, borderWidth: 1, borderColor: "#dadce0" },
   label: { fontSize: 14, fontWeight: "600", color: "#3c4043" },
   input: { borderWidth: 1, borderColor: "#dadce0", borderRadius: 10, padding: 12, fontSize: 16 },
-  hint: { fontSize: 13, color: "#5f6368" },
   row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  account: { textAlign: "center", color: "#5f6368", fontSize: 13 },
+  link: { color: "#1a73e8" },
   ocrToggle: { color: "#1a73e8", textAlign: "center", marginTop: 8 },
   ocrText: { fontFamily: "Courier", fontSize: 12, color: "#3c4043", backgroundColor: "#f1f3f4", padding: 12, borderRadius: 8 },
 });

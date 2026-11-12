@@ -8,6 +8,7 @@ export default function RootLayout() {
       <Stack>
         <Stack.Screen name="index" options={{ title: "Flyr" }} />
         <Stack.Screen name="review" options={{ title: "Review event" }} />
+        <Stack.Screen name="auth" options={{ headerShown: false, animation: "none" }} />
       </Stack>
     </>
   );

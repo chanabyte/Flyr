@@ -5,22 +5,37 @@ import { getDeviceId } from "./device";
 import type { CalendarEvent, ExtractResponse } from "./types";
 
 /**
- * Where the Flyr server lives. Set EXPO_PUBLIC_API_URL in mobile/.env to override.
- * In development we default to the same computer that runs `expo start`
- * (its LAN IP comes from hostUri), so a phone on the same Wi-Fi just works.
+ * Where the Flyr server lives.
+ * - Set EXPO_PUBLIC_API_URL in mobile/.env (e.g. your ngrok https address) to use that.
+ * - Otherwise we use the computer running `expo start` on port 3000, which only
+ *   works when the phone and laptop are on the same Wi-Fi and it allows that.
  */
 function apiUrl(): string {
-  if (process.env.EXPO_PUBLIC_API_URL) return process.env.EXPO_PUBLIC_API_URL;
+  if (process.env.EXPO_PUBLIC_API_URL) return process.env.EXPO_PUBLIC_API_URL.replace(/\/$/, "");
   const host = Constants.expoConfig?.hostUri?.split(":")[0] ?? "localhost";
   return `http://${host}:3000`;
 }
 
 /** fetch() against our server, with this phone's device ID and JSON error handling. */
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${apiUrl()}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", "X-Device-Id": await getDeviceId(), ...init.headers },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${apiUrl()}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Device-Id": await getDeviceId(),
+        "ngrok-skip-browser-warning": "1", // ngrok's free plan otherwise returns a warning page
+        ...init.headers,
+      },
+    });
+  } catch {
+    throw new ApiError(
+      `Can't reach the Flyr server at ${apiUrl()}. Is it running? On school or public Wi-Fi, ` +
+        "set EXPO_PUBLIC_API_URL in mobile/.env to your ngrok address.",
+      0,
+    );
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(data.error ?? `Server error ${res.status}`, res.status);
   return data as T;

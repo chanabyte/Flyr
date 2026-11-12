@@ -37,8 +37,15 @@ app.post("/extract", async (req, res) => {
     const response: ExtractResponse = { rawText: ocr.text, ocrConfidence: ocr.confidence, event };
     res.json(response);
   } catch (err) {
-    console.error(err);
-    res.status(502).json({ error: "Could not read an event from that image" });
+    const status = (err as { status?: number }).status;
+    console.error(`Extract failed (${status ?? "no status"}):`, (err as Error).message);
+    if (status === 429) {
+      res.status(429).json({ error: "Gemini usage limit reached. Try again later." });
+    } else if (status === 503) {
+      res.status(503).json({ error: "Gemini is busy right now. Try again in a minute." });
+    } else {
+      res.status(502).json({ error: "Could not read an event from that image" });
+    }
   }
 });
 

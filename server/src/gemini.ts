@@ -47,14 +47,40 @@ OCR text:
 ${rawText}
 """`;
 
-  const interaction = await ai.interactions.create({
-    model: MODEL,
-    input: [{ type: "text", text: prompt }],
-    response_format: { type: "text", mime_type: "application/json", schema: eventSchema },
-  });
+  const interaction = await withRetry(() =>
+    ai.interactions.create(
+      {
+        model: MODEL,
+        // The v1 API wants content wrapped in a "user_input" step
+        input: [{ type: "user_input", content: [{ type: "text", text: prompt }] }],
+        response_format: { type: "text", mime_type: "application/json", schema: eventSchema },
+      },
+      // 20s cap per attempt; SDK retries off so withRetry is the only retry layer
+      { timeout_ms: 20_000, retries: { strategy: "none" } },
+    ),
+  );
 
   if (!interaction.output_text) throw new Error("Gemini returned no output");
   return clean(JSON.parse(interaction.output_text));
+}
+
+/** Retry when Gemini is overloaded (503), rate limited (429) or times out. Backoff: 1s, 2s. */
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const e = err as { status?: number; name?: string; message?: string };
+      const timedOut = /timeout|abort|interrupt/i.test(e.name ?? "");
+      // A daily quota won't come back in a few seconds, so don't burn time retrying it
+      const dailyQuota = e.status === 429 && /per day/i.test(e.message ?? "");
+      const retryable = (e.status === 503 || e.status === 429 || timedOut) && !dailyQuota;
+      if (!retryable || i >= attempts - 1) throw err;
+      const delay = 1000 * 2 ** i;
+      console.warn(`Gemini ${timedOut ? "timeout" : e.status}, retrying in ${delay / 1000}s…`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
 }
 
 /** Drop the empty strings the schema forces, so the result is a valid Calendar API body. */
